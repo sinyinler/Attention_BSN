@@ -1,0 +1,33 @@
+{
+  "seed": 42,
+  "device": "auto",
+  "data": {
+    "normalize": "percentile",
+    "percentile_low": 1.0,
+    "percentile_high": 99.0
+  },
+  "model": {
+    "in_channels": 1,
+    "base_channels": 64,
+    "blind_radius": 8,
+    "annulus_width": 6,
+    "kv_depth": 2,
+    "attention_topk": 32,
+    "candidate_stride": 4,
+    "attention_chunk_size": 4096
+  },
+  "loss": {
+    "mask_mode": "grid",
+    "grid_period": 5,
+    "random_ratio": 0.03,
+    "entropy_weight": 0.0001
+  },
+  "train": {
+    "steps": 3000,
+    "lr": 0.001,
+    "weight_decay": 0.0,
+    "log_interval": 50,
+    "save_interval": 500,
+    "output_dir": "runs/attention_bsn"
+  }
+}
