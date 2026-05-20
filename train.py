@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from typing import Any, Dict
@@ -41,6 +42,27 @@ def select_device(name: str) -> torch.device:
     if name == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(name)
+
+
+def make_autocast(device: torch.device, enabled: bool):
+    """创建 AMP autocast 上下文，只在 CUDA 上启用。"""
+
+    enabled = bool(enabled) and device.type == "cuda"
+    if not enabled:
+        return nullcontext()
+    try:
+        return torch.amp.autocast(device_type="cuda", dtype=torch.float16)
+    except AttributeError:
+        return torch.cuda.amp.autocast(dtype=torch.float16)
+
+
+def make_grad_scaler(enabled: bool):
+    """兼容不同 PyTorch 版本的 GradScaler。"""
+
+    try:
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 def build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
@@ -115,6 +137,9 @@ def main() -> None:
         lr=float(config["train"]["lr"]),
         weight_decay=float(config["train"].get("weight_decay", 0.0)),
     )
+    train_amp = bool(config["train"].get("amp", True)) and device.type == "cuda"
+    infer_amp = bool(config.get("infer", {}).get("amp", train_amp)) and device.type == "cuda"
+    scaler = make_grad_scaler(train_amp)
 
     steps = int(config["train"]["steps"])
     patch_size = int(config["train"].get("patch_size", 0))
@@ -128,13 +153,15 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
 
         train_image = random_crop_tensor(image, patch_size)
-        pred, aux = model(train_image)
-        recon_loss, _ = criterion(pred, train_image)
-        entropy_loss = attention_entropy_regularizer(aux["attention_entropy"])
-        loss = recon_loss + entropy_weight * entropy_loss
+        with make_autocast(device, train_amp):
+            pred, aux = model(train_image)
+            recon_loss, _ = criterion(pred, train_image)
+            entropy_loss = attention_entropy_regularizer(aux["attention_entropy"])
+            loss = recon_loss + entropy_weight * entropy_loss
 
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         if step % log_interval == 0 or step == 1:
             record = {
@@ -166,13 +193,14 @@ def main() -> None:
         tile_size = int(config.get("infer", {}).get("tile_size", 0))
         tile_overlap = int(config.get("infer", {}).get("tile_overlap", 32))
         tile_context = int(config.get("infer", {}).get("tile_context", tile_overlap))
-        denoised_norm = tiled_predict(
-            image,
-            lambda tile: model(tile)[0],
-            tile_size=tile_size,
-            overlap=tile_overlap,
-            context=tile_context,
-        )
+        with make_autocast(device, infer_amp):
+            denoised_norm = tiled_predict(
+                image,
+                lambda tile: model(tile)[0],
+                tile_size=tile_size,
+                overlap=tile_overlap,
+                context=tile_context,
+            )
     denoised_norm_np = denoised_norm.squeeze().detach().cpu().numpy().astype(np.float32)
     denoised_raw = denormalize_image(denoised_norm_np, data.norm_meta)
 

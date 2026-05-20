@@ -59,7 +59,8 @@ class SparseNonLocalAttention(nn.Module):
         """
 
         valid = torch.isfinite(scores)
-        safe_scores = scores.masked_fill(~valid, -1.0e9)
+        # AMP/float16 下 -1e9 可能溢出，使用当前 dtype 可表示的最小值更稳。
+        safe_scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
         max_scores = safe_scores.max(dim=-1, keepdim=True).values
         weights = torch.exp(safe_scores - max_scores) * valid.to(scores.dtype)
         denom = weights.sum(dim=-1, keepdim=True)

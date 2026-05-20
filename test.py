@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict
 
@@ -33,6 +34,18 @@ def select_device(name: str) -> torch.device:
     return torch.device(name)
 
 
+def make_autocast(device: torch.device, enabled: bool):
+    """创建 AMP autocast 上下文，只在 CUDA 上启用。"""
+
+    enabled = bool(enabled) and device.type == "cuda"
+    if not enabled:
+        return nullcontext()
+    try:
+        return torch.amp.autocast(device_type="cuda", dtype=torch.float16)
+    except AttributeError:
+        return torch.cuda.amp.autocast(dtype=torch.float16)
+
+
 def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:
     try:
         return torch.load(path, map_location=device, weights_only=False)
@@ -54,6 +67,7 @@ def main() -> None:
     model.eval()
 
     with torch.no_grad():
+        infer_amp = bool(config.get("infer", {}).get("amp", True)) and device.type == "cuda"
         tile_size = int(config.get("infer", {}).get("tile_size", 0))
         if args.tile_size is not None:
             tile_size = args.tile_size
@@ -61,13 +75,14 @@ def main() -> None:
         tile_context = int(config.get("infer", {}).get("tile_context", tile_overlap))
         if args.tile_context is not None:
             tile_context = args.tile_context
-        pred_norm = tiled_predict(
-            image,
-            lambda tile: model(tile)[0],
-            tile_size=tile_size,
-            overlap=tile_overlap,
-            context=tile_context,
-        )
+        with make_autocast(device, infer_amp):
+            pred_norm = tiled_predict(
+                image,
+                lambda tile: model(tile)[0],
+                tile_size=tile_size,
+                overlap=tile_overlap,
+                context=tile_context,
+            )
     pred_norm_np = pred_norm.squeeze().detach().cpu().numpy().astype(np.float32)
     pred_raw = denormalize_image(pred_norm_np, data.norm_meta)
 
