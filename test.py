@@ -11,6 +11,7 @@ from datasets import load_single_image_data
 from models import AttentionBSN
 from utils.image_io import denormalize_image, load_image_array, save_array, save_preview
 from utils.metrics import compute_psnr, compute_ssim
+from utils.tiling import tiled_predict
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,6 +22,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preview", default=None, help="可选预览图路径，例如 denoised_preview.tif")
     parser.add_argument("--gt", default=None, help="可选 clean/long-window BFI 参考图，用于计算指标")
     parser.add_argument("--device", default="auto", help="cuda / cpu / auto")
+    parser.add_argument("--tile-size", type=int, default=None, help="覆盖配置中的滑窗 tile 尺寸，0 表示全图")
+    parser.add_argument("--tile-context", type=int, default=None, help="覆盖配置中的滑窗上下文半径")
     return parser.parse_args()
 
 
@@ -51,7 +54,20 @@ def main() -> None:
     model.eval()
 
     with torch.no_grad():
-        pred_norm, _ = model(image)
+        tile_size = int(config.get("infer", {}).get("tile_size", 0))
+        if args.tile_size is not None:
+            tile_size = args.tile_size
+        tile_overlap = int(config.get("infer", {}).get("tile_overlap", 32))
+        tile_context = int(config.get("infer", {}).get("tile_context", tile_overlap))
+        if args.tile_context is not None:
+            tile_context = args.tile_context
+        pred_norm = tiled_predict(
+            image,
+            lambda tile: model(tile)[0],
+            tile_size=tile_size,
+            overlap=tile_overlap,
+            context=tile_context,
+        )
     pred_norm_np = pred_norm.squeeze().detach().cpu().numpy().astype(np.float32)
     pred_raw = denormalize_image(pred_norm_np, data.norm_meta)
 

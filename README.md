@@ -44,6 +44,29 @@ python train.py \
 - `history.json`：训练过程中的 loss、attention entropy 等日志
 - `resolved_config.json`：本次实际使用的配置
 
+大图显存不足时，优先调这些参数：
+
+- `train.patch_size`：训练随机裁剪尺寸，默认 `256`。OOM 时先改成 `192` 或 `128`。
+- `infer.tile_size`：最终整图输出的滑窗尺寸，默认 `256`。推理 OOM 时同步调小。
+- `infer.tile_context`：滑窗推理额外上下文半径，默认 `64`。它能明显减轻拼接伪影。
+- `model.base_channels`：默认 `24`，越小越省显存。
+- `model.attention_topk`：默认 `8`，越小越省显存。
+- `model.candidate_stride`：默认 `8`，越大越省显存。
+
+也可以直接用命令行覆盖：
+
+```bash
+python train.py \
+  --image path/to/bfi.npy \
+  --output-dir runs/bfi_attention_bsn \
+  --steps 3000 \
+  --patch-size 192 \
+  --tile-size 192 \
+  --tile-context 64
+```
+
+如果最终推理仍能放进显存，可以用 `--tile-size 0` 做整图前向，完全避免滑窗拼接；如果整图前向 OOM，再使用默认的 halo 滑窗。
+
 ## 推理 / 测试
 
 ```bash
@@ -74,6 +97,10 @@ python scripts/check_j_invariance.py \
 ```
 
 这个脚本会随机选若干像素，只扰动该像素 `blind_radius` 半径内的输入，再比较该像素输出是否改变。最大变化接近 `0` 才说明中心盲区约束基本成立。
+
+## 关于多卡
+
+这个项目默认是单图训练，batch size 等于 1。常规 `DataParallel/DDP` 是按 batch 维度切分，多卡不会把一张大图自动拆到两张显卡上，因此对当前 OOM 帮助很小。更推荐使用 `train.patch_size` 做随机 patch 训练，用 `infer.tile_size` 做滑窗整图推理。
 
 ## 常用配置
 
