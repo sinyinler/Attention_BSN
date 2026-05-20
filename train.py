@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from datasets import load_single_image_data
-from losses import BlindSpotReconstructionLoss, attention_entropy_regularizer
+from losses import BlindSpotReconstructionLoss, RTVRegularizer, attention_entropy_regularizer
 from models import AttentionBSN
 from utils.config import deep_update, load_config, save_config
 from utils.image_io import denormalize_image, save_array, save_preview
@@ -129,7 +129,17 @@ def main() -> None:
         mask_mode=config["loss"].get("mask_mode", "grid"),
         grid_period=int(config["loss"].get("grid_period", 5)),
         random_ratio=float(config["loss"].get("random_ratio", 0.03)),
+        loss_type=config["loss"].get("type", "charbonnier"),
+        charbonnier_eps=float(config["loss"].get("charbonnier_eps", 1.0e-3)),
     )
+    rtv_regularizer = RTVRegularizer(
+        radius=int(config["loss"].get("rtv_radius", 2)),
+        sigma=float(config["loss"].get("rtv_sigma", 2.0)),
+        eps=float(config["loss"].get("rtv_eps", 1.0e-3)),
+        reduction="mean",
+    ).to(device)
+    recon_weight = float(config["loss"].get("charbonnier_weight", 1.0))
+    rtv_weight = float(config["loss"].get("rtv_weight", 0.01))
     entropy_weight = float(config["loss"].get("entropy_weight", 0.0))
 
     optimizer = torch.optim.AdamW(
@@ -155,9 +165,14 @@ def main() -> None:
         train_image = random_crop_tensor(image, patch_size)
         with make_autocast(device, train_amp):
             pred, aux = model(train_image)
-            recon_loss, _ = criterion(pred, train_image)
-            entropy_loss = attention_entropy_regularizer(aux["attention_entropy"])
-            loss = recon_loss + entropy_weight * entropy_loss
+
+        # loss 用 FP32 计算，避免 AMP 下 Charbonnier/RTV 的小 eps 数值不稳。
+        pred_for_loss = pred.float()
+        target_for_loss = train_image.float()
+        recon_loss, _ = criterion(pred_for_loss, target_for_loss)
+        rtv_loss = rtv_regularizer(pred_for_loss)
+        entropy_loss = attention_entropy_regularizer(aux["attention_entropy"].float())
+        loss = recon_weight * recon_loss + rtv_weight * rtv_loss + entropy_weight * entropy_loss
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)
@@ -168,13 +183,15 @@ def main() -> None:
                 "step": step,
                 "loss": float(loss.detach().cpu()),
                 "recon_loss": float(recon_loss.detach().cpu()),
+                "rtv_loss": float(rtv_loss.detach().cpu()),
                 "attention_entropy": float(aux["attention_entropy"].detach().cpu()),
                 "valid_query_ratio": float(aux["valid_query_ratio"].detach().cpu()),
             }
             history.append(record)
             message = (
                 f"step={step:05d} loss={record['loss']:.6f} "
-                f"mse={record['recon_loss']:.6f} "
+                f"recon={record['recon_loss']:.6f} "
+                f"rtv={record['rtv_loss']:.6f} "
                 f"entropy={record['attention_entropy']:.4f} "
                 f"valid={record['valid_query_ratio']:.3f}"
             )
@@ -205,7 +222,7 @@ def main() -> None:
     denoised_raw = denormalize_image(denoised_norm_np, data.norm_meta)
 
     save_array(output_dir / "denoised.npy", denoised_raw)
-    save_preview(output_dir / "denoised_preview.png", denoised_norm_np)
+    save_preview(output_dir / "denoised_preview.png", denoised_raw)
 
     with (output_dir / "history.json").open("w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)

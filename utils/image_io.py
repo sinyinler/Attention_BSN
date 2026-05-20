@@ -35,16 +35,33 @@ def load_image_array(path: str | Path) -> np.ndarray:
 
 def normalize_image(
     arr: np.ndarray,
-    mode: str = "percentile",
+    mode: str = "log1p",
     percentile_low: float = 1.0,
     percentile_high: float = 99.0,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """把图像归一化到适合训练的数值范围。"""
+    """把图像变换到训练域。
+
+    默认只做 log1p，不做百分位数归一化；推理输出会用 expm1 逆变换回来。
+    旧的 minmax/percentile 分支保留，是为了兼容之前训练出的 checkpoint。
+    """
 
     arr = arr.astype(np.float32)
     finite = np.isfinite(arr)
     if not finite.any():
         raise ValueError("输入图像没有有效数值。")
+
+    if mode == "log1p":
+        min_value = float(np.nanmin(arr))
+        if min_value < -1.0:
+            raise ValueError("log1p 要求输入值 >= -1。请检查 BFI 数据是否存在异常负值。")
+        norm = np.log1p(arr)
+        meta = {
+            "mode": mode,
+            "offset": 0.0,
+            "scale": 1.0,
+            "shape": list(arr.shape),
+        }
+        return norm.astype(np.float32), meta
 
     if mode == "none":
         offset = 0.0
@@ -79,7 +96,7 @@ def normalize_image(
 
 def load_normalized_image(
     path: str | Path,
-    mode: str = "percentile",
+    mode: str = "log1p",
     percentile_low: float = 1.0,
     percentile_high: float = 99.0,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -90,6 +107,8 @@ def load_normalized_image(
 def denormalize_image(norm: np.ndarray, meta: Dict[str, Any]) -> np.ndarray:
     """把网络输出还原到原始 BFI 数值尺度。"""
 
+    if meta.get("mode") == "log1p":
+        return np.expm1(norm.astype(np.float32))
     return norm.astype(np.float32) * float(meta.get("scale", 1.0)) + float(meta.get("offset", 0.0))
 
 

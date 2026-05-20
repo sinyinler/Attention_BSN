@@ -9,7 +9,9 @@
 - `models/masked_layers.py`：环形盲点卷积，Q 分支只看中心半径外的外环信息。
 - `models/nonlocal_attention.py`：下采样候选池 + top-k + 分块 query 的稀疏非局部 attention。
 - `models/attention_bsn.py`：attention-BSN 主模型，融合 local blind feature 和 non-local feature。
-- `losses/bsn_loss.py`：整图周期盲点采样的自监督 MSE，以及 attention 熵正则。
+- `losses/bsn_loss.py`：整图周期盲点采样的自监督重建损失。
+- `losses/charbonnier.py`：Charbonnier 主损失。
+- `losses/rtv.py`：RTV 弱正则，用于压制小尺度纹理/噪声。
 - `scripts/check_j_invariance.py`：扰动中心盲区，检查目标像素预测是否变化。
 
 默认配置里 `blind_radius=8`，K/V 分支有两层 `3x3` 卷积，因此 attention 的实际候选排除半径是 `8 + 2 = 10` 像素，避免 K/V 的局部感受野把中心信息间接带回来。
@@ -43,6 +45,12 @@ python train.py \
 - `checkpoint_final.pt`：最终模型
 - `history.json`：训练过程中的 loss、attention entropy 等日志
 - `resolved_config.json`：本次实际使用的配置
+
+默认数据处理只做 `log1p`：
+
+- 训练/推理输入：`log1p(BFI)`
+- 保存 `denoised.npy`：对网络输出做 `expm1`，回到原始 BFI 数值尺度
+- 不再做 percentile 或 min-max 归一化
 
 大图显存不足时，优先调这些参数：
 
@@ -113,6 +121,10 @@ python scripts/check_j_invariance.py \
 - `model.candidate_stride`：K/V 候选池下采样步长。越小越准，越大越省显存。
 - `model.attention_topk`：每个 query 使用的非局部候选数量。
 - `loss.grid_period`：周期盲点采样间隔，默认 `5`，大约每步监督 4% 像素。
+- `loss.type`：默认 `charbonnier`，替代旧版 MSE 主损失。
+- `loss.charbonnier_weight`：默认 `1.0`。
+- `loss.rtv_weight`：默认 `0.01`。
+- `loss.rtv_sigma` / `loss.rtv_radius`：默认 `2.0` / `2`。
 - `loss.entropy_weight`：attention 熵正则权重，默认很小，只用于抑制“噪声相似”的过尖锐 attention。
 
 ## 当前实现边界

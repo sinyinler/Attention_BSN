@@ -89,7 +89,7 @@ def main() -> None:
     output = Path(args.output)
     save_array(output, pred_raw)
     preview = Path(args.preview) if args.preview is not None else output.with_name(output.stem + "_preview.png")
-    save_preview(preview, pred_norm_np)
+    save_preview(preview, pred_raw)
 
     if args.gt is not None:
         gt = load_image_array(args.gt)

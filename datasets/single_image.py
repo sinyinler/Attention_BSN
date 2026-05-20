@@ -21,7 +21,7 @@ class SingleImageData:
 def load_single_image_data(path: str | Path, data_config: Dict[str, Any]) -> SingleImageData:
     image, meta = load_normalized_image(
         path,
-        mode=data_config.get("normalize", "percentile"),
+        mode=data_config.get("normalize", "log1p"),
         percentile_low=float(data_config.get("percentile_low", 1.0)),
         percentile_high=float(data_config.get("percentile_high", 99.0)),
     )

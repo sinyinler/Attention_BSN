@@ -2,9 +2,7 @@
   "seed": 42,
   "device": "auto",
   "data": {
-    "normalize": "percentile",
-    "percentile_low": 1.0,
-    "percentile_high": 99.0
+    "normalize": "log1p"
   },
   "model": {
     "in_channels": 1,
@@ -17,6 +15,13 @@
     "attention_chunk_size": 512
   },
   "loss": {
+    "type": "charbonnier",
+    "charbonnier_weight": 1.0,
+    "charbonnier_eps": 0.001,
+    "rtv_weight": 0.01,
+    "rtv_radius": 2,
+    "rtv_sigma": 2.0,
+    "rtv_eps": 0.001,
     "mask_mode": "grid",
     "grid_period": 5,
     "random_ratio": 0.03,
