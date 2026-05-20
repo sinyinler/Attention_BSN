@@ -39,7 +39,7 @@ python train.py \
 训练输出：
 
 - `denoised.npy`：还原到原始 BFI 数值尺度的降噪结果
-- `denoised_preview.tif`：16-bit 预览图
+- `denoised_preview.png`：8-bit 预览图，方便直接查看
 - `checkpoint_final.pt`：最终模型
 - `history.json`：训练过程中的 loss、attention entropy 等日志
 - `resolved_config.json`：本次实际使用的配置

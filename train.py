@@ -177,7 +177,7 @@ def main() -> None:
     denoised_raw = denormalize_image(denoised_norm_np, data.norm_meta)
 
     save_array(output_dir / "denoised.npy", denoised_raw)
-    save_preview(output_dir / "denoised_preview.tif", denoised_norm_np)
+    save_preview(output_dir / "denoised_preview.png", denoised_norm_np)
 
     with (output_dir / "history.json").open("w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)

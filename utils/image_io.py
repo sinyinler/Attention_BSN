@@ -105,7 +105,12 @@ def save_array(path: str | Path, arr: np.ndarray) -> None:
 
 
 def save_preview(path: str | Path, arr: np.ndarray) -> None:
-    """保存 16-bit 预览图。若输入不在 [0,1]，会按当前图像 min-max 拉伸。"""
+    """保存预览图。
+
+    PNG/JPG/BMP 默认保存为 8-bit，兼容普通图片查看器；
+    TIF/TIFF 保存为 16-bit，适合需要更细灰度层级的场景。
+    若输入不在 [0,1]，会按当前图像 min-max 拉伸。
+    """
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,5 +125,9 @@ def save_preview(path: str | Path, arr: np.ndarray) -> None:
         scale = max(hi - lo, 1.0e-12)
         arr = (arr - lo) / scale
     arr = np.clip(arr, 0.0, 1.0)
-    out = (arr * 65535.0 + 0.5).astype(np.uint16)
+
+    if path.suffix.lower() in {".tif", ".tiff"}:
+        out = (arr * 65535.0 + 0.5).astype(np.uint16)
+    else:
+        out = (arr * 255.0 + 0.5).astype(np.uint8)
     Image.fromarray(out).save(path)

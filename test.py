@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image", required=True, help="待降噪 BFI 图路径")
     parser.add_argument("--checkpoint", required=True, help="train.py 保存的 checkpoint")
     parser.add_argument("--output", default="runs/attention_bsn/test_denoised.npy", help="输出 npy 路径")
-    parser.add_argument("--preview", default=None, help="可选预览图路径，例如 denoised_preview.tif")
+    parser.add_argument("--preview", default=None, help="可选预览图路径，例如 denoised_preview.png")
     parser.add_argument("--gt", default=None, help="可选 clean/long-window BFI 参考图，用于计算指标")
     parser.add_argument("--device", default="auto", help="cuda / cpu / auto")
     parser.add_argument("--tile-size", type=int, default=None, help="覆盖配置中的滑窗 tile 尺寸，0 表示全图")
@@ -73,7 +73,7 @@ def main() -> None:
 
     output = Path(args.output)
     save_array(output, pred_raw)
-    preview = Path(args.preview) if args.preview is not None else output.with_name(output.stem + "_preview.tif")
+    preview = Path(args.preview) if args.preview is not None else output.with_name(output.stem + "_preview.png")
     save_preview(preview, pred_norm_np)
 
     if args.gt is not None:
