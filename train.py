@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict
 
@@ -63,6 +64,40 @@ def make_grad_scaler(enabled: bool):
         return torch.amp.GradScaler("cuda", enabled=enabled)
     except (AttributeError, TypeError):
         return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
+def compute_learning_rate(
+    step: int,
+    total_steps: int,
+    initial_lr: float,
+    peak_lr: float,
+    final_lr: float,
+    warmup_ratio: float,
+) -> float:
+    """前 20% warmup 到 peak_lr，之后 cosine annealing 到 final_lr。"""
+
+    total_steps = max(1, int(total_steps))
+    step = min(max(1, int(step)), total_steps)
+    warmup_steps = max(1, int(round(total_steps * warmup_ratio)))
+
+    if warmup_steps > 1 and step <= warmup_steps:
+        progress = (step - 1) / float(warmup_steps - 1)
+        return initial_lr + (peak_lr - initial_lr) * progress
+
+    if step <= warmup_steps:
+        return peak_lr
+
+    decay_steps = max(1, total_steps - warmup_steps)
+    progress = (step - warmup_steps) / float(decay_steps)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return final_lr + (peak_lr - final_lr) * cosine
+
+
+def set_optimizer_lr(optimizer: torch.optim.Optimizer, lr: float) -> None:
+    """把当前 step 的学习率写入 optimizer。"""
+
+    for group in optimizer.param_groups:
+        group["lr"] = lr
 
 
 def build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
@@ -142,9 +177,14 @@ def main() -> None:
     rtv_weight = float(config["loss"].get("rtv_weight", 0.01))
     entropy_weight = float(config["loss"].get("entropy_weight", 0.0))
 
+    initial_lr = float(config["train"].get("initial_lr", config["train"].get("lr", 5.0e-4)))
+    peak_lr = float(config["train"].get("peak_lr", initial_lr))
+    final_lr = float(config["train"].get("final_lr", 0.0))
+    warmup_ratio = float(config["train"].get("warmup_ratio", 0.2))
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=float(config["train"]["lr"]),
+        lr=initial_lr,
         weight_decay=float(config["train"].get("weight_decay", 0.0)),
     )
     train_amp = bool(config["train"].get("amp", True)) and device.type == "cuda"
@@ -160,6 +200,15 @@ def main() -> None:
     history = []
     for step in iterator:
         model.train()
+        current_lr = compute_learning_rate(
+            step=step,
+            total_steps=steps,
+            initial_lr=initial_lr,
+            peak_lr=peak_lr,
+            final_lr=final_lr,
+            warmup_ratio=warmup_ratio,
+        )
+        set_optimizer_lr(optimizer, current_lr)
         optimizer.zero_grad(set_to_none=True)
 
         train_image = random_crop_tensor(image, patch_size)
@@ -181,6 +230,7 @@ def main() -> None:
         if step % log_interval == 0 or step == 1:
             record = {
                 "step": step,
+                "lr": current_lr,
                 "loss": float(loss.detach().cpu()),
                 "recon_loss": float(recon_loss.detach().cpu()),
                 "rtv_loss": float(rtv_loss.detach().cpu()),
@@ -190,6 +240,7 @@ def main() -> None:
             history.append(record)
             message = (
                 f"step={step:05d} loss={record['loss']:.6f} "
+                f"lr={record['lr']:.6g} "
                 f"recon={record['recon_loss']:.6f} "
                 f"rtv={record['rtv_loss']:.6f} "
                 f"entropy={record['attention_entropy']:.4f} "

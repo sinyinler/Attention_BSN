@@ -126,6 +126,10 @@ python scripts/check_j_invariance.py \
 - `loss.rtv_weight`：默认 `0.01`。
 - `loss.rtv_sigma` / `loss.rtv_radius`：默认 `2.0` / `2`。
 - `loss.entropy_weight`：attention 熵正则权重，默认很小，只用于抑制“噪声相似”的过尖锐 attention。
+- `train.lr`：warmup 初始学习率，默认 `0.0005`。
+- `train.peak_lr`：warmup 结束学习率，默认 `0.01`。
+- `train.warmup_ratio`：warmup 占总步数比例，默认 `0.2`。
+- `train.final_lr`：cosine annealing 最终学习率，默认 `0.0`。
 
 ## 当前实现边界
 
