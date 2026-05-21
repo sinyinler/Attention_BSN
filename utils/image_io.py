@@ -35,14 +35,14 @@ def load_image_array(path: str | Path) -> np.ndarray:
 
 def normalize_image(
     arr: np.ndarray,
-    mode: str = "log1p",
+    mode: str = "meanstd",
     percentile_low: float = 1.0,
     percentile_high: float = 99.0,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """把图像变换到训练域。
 
-    默认只做 log1p，不做百分位数归一化；推理输出会用 expm1 逆变换回来。
-    旧的 minmax/percentile 分支保留，是为了兼容之前训练出的 checkpoint。
+    默认做均值-标准差归一化；推理输出会用 output * std + mean 逆变换回来。
+    旧的 log1p/minmax/percentile 分支保留，是为了兼容之前训练出的 checkpoint。
     """
 
     arr = arr.astype(np.float32)
@@ -59,6 +59,22 @@ def normalize_image(
             "mode": mode,
             "offset": 0.0,
             "scale": 1.0,
+            "shape": list(arr.shape),
+        }
+        return norm.astype(np.float32), meta
+
+    if mode == "meanstd":
+        mean = float(np.nanmean(arr))
+        std = float(np.nanstd(arr))
+        if std < 1.0e-12:
+            std = 1.0
+        norm = (arr - mean) / std
+        meta = {
+            "mode": mode,
+            "offset": mean,
+            "scale": std,
+            "mean": mean,
+            "std": std,
             "shape": list(arr.shape),
         }
         return norm.astype(np.float32), meta
@@ -96,7 +112,7 @@ def normalize_image(
 
 def load_normalized_image(
     path: str | Path,
-    mode: str = "log1p",
+    mode: str = "meanstd",
     percentile_low: float = 1.0,
     percentile_high: float = 99.0,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -109,6 +125,10 @@ def denormalize_image(norm: np.ndarray, meta: Dict[str, Any]) -> np.ndarray:
 
     if meta.get("mode") == "log1p":
         return np.expm1(norm.astype(np.float32))
+    if meta.get("mode") == "meanstd":
+        return norm.astype(np.float32) * float(meta.get("std", meta.get("scale", 1.0))) + float(
+            meta.get("mean", meta.get("offset", 0.0))
+        )
     return norm.astype(np.float32) * float(meta.get("scale", 1.0)) + float(meta.get("offset", 0.0))
 
 

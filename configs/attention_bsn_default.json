@@ -2,7 +2,7 @@
   "seed": 42,
   "device": "auto",
   "data": {
-    "normalize": "log1p"
+    "normalize": "meanstd"
   },
   "model": {
     "in_channels": 1,
@@ -15,10 +15,9 @@
     "attention_chunk_size": 1024
   },
   "loss": {
-    "type": "charbonnier",
-    "charbonnier_weight": 1.0,
-    "charbonnier_eps": 0.001,
-    "rtv_weight": 0.01,
+    "type": "mse",
+    "reconstruction_weight": 1.0,
+    "rtv_weight": 0.0,
     "rtv_radius": 2,
     "rtv_sigma": 2.0,
     "rtv_eps": 0.001,

@@ -164,7 +164,7 @@ def main() -> None:
         mask_mode=config["loss"].get("mask_mode", "grid"),
         grid_period=int(config["loss"].get("grid_period", 5)),
         random_ratio=float(config["loss"].get("random_ratio", 0.03)),
-        loss_type=config["loss"].get("type", "charbonnier"),
+        loss_type=config["loss"].get("type", "mse"),
         charbonnier_eps=float(config["loss"].get("charbonnier_eps", 1.0e-3)),
     )
     rtv_regularizer = RTVRegularizer(
@@ -173,7 +173,7 @@ def main() -> None:
         eps=float(config["loss"].get("rtv_eps", 1.0e-3)),
         reduction="mean",
     ).to(device)
-    recon_weight = float(config["loss"].get("charbonnier_weight", 1.0))
+    recon_weight = float(config["loss"].get("reconstruction_weight", config["loss"].get("charbonnier_weight", 1.0)))
     rtv_weight = float(config["loss"].get("rtv_weight", 0.01))
     entropy_weight = float(config["loss"].get("entropy_weight", 0.0))
 
@@ -215,11 +215,14 @@ def main() -> None:
         with make_autocast(device, train_amp):
             pred, aux = model(train_image)
 
-        # loss 用 FP32 计算，避免 AMP 下 Charbonnier/RTV 的小 eps 数值不稳。
+        # loss 用 FP32 计算，避免 AMP 下小 eps 和正则项数值不稳。
         pred_for_loss = pred.float()
         target_for_loss = train_image.float()
         recon_loss, _ = criterion(pred_for_loss, target_for_loss)
-        rtv_loss = rtv_regularizer(pred_for_loss)
+        if rtv_weight != 0.0:
+            rtv_loss = rtv_regularizer(pred_for_loss)
+        else:
+            rtv_loss = pred_for_loss.new_tensor(0.0)
         entropy_loss = attention_entropy_regularizer(aux["attention_entropy"].float())
         loss = recon_weight * recon_loss + rtv_weight * rtv_loss + entropy_weight * entropy_loss
 

@@ -21,7 +21,7 @@ class BlindSpotReconstructionLoss(nn.Module):
         mask_mode: Literal["grid", "random"] = "grid",
         grid_period: int = 5,
         random_ratio: float = 0.03,
-        loss_type: Literal["mse", "l1", "charbonnier"] = "charbonnier",
+        loss_type: Literal["mse", "l1", "charbonnier"] = "mse",
         charbonnier_eps: float = 1.0e-3,
     ) -> None:
         super().__init__()
