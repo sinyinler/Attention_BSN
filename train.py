@@ -100,6 +100,138 @@ def set_optimizer_lr(optimizer: torch.optim.Optimizer, lr: float) -> None:
         group["lr"] = lr
 
 
+def make_fixed_mask(
+    shape: torch.Size,
+    device: torch.device,
+    dtype: torch.dtype,
+    mode: str,
+    grid_period: int,
+    random_ratio: float,
+    index: int,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    """为监测集生成固定盲点 mask。"""
+
+    _, _, height, width = shape
+    if mode == "grid":
+        period = max(1, int(grid_period))
+        oy = index % period
+        ox = (index * 3) % period
+        yy = torch.arange(height, device=device)[:, None]
+        xx = torch.arange(width, device=device)[None, :]
+        mask = ((yy - oy) % period == 0) & ((xx - ox) % period == 0)
+        return mask[None, None].to(dtype=dtype)
+
+    if mode == "random":
+        return (torch.rand(shape, device=device, generator=generator) < float(random_ratio)).to(dtype=dtype)
+
+    raise ValueError(f"未知 monitor mask_mode: {mode}")
+
+
+def build_monitor_batches(
+    image: torch.Tensor,
+    monitor_config: Dict[str, Any],
+    seed: int,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """构建固定验证 patch，用于观察单图自监督是否开始拟合噪声。"""
+
+    num_patches = max(1, int(monitor_config.get("num_patches", 4)))
+    patch_size = int(monitor_config.get("patch_size", 512))
+    mask_mode = monitor_config.get("mask_mode", "grid")
+    grid_period = int(monitor_config.get("grid_period", 5))
+    random_ratio = float(monitor_config.get("random_ratio", 0.03))
+
+    _, _, height, width = image.shape
+    crop_h = height if patch_size <= 0 else min(patch_size, height)
+    crop_w = width if patch_size <= 0 else min(patch_size, width)
+    generator = torch.Generator(device=image.device)
+    generator.manual_seed(int(seed) + 2027)
+
+    batches: list[tuple[torch.Tensor, torch.Tensor]] = []
+    for index in range(num_patches):
+        if height == crop_h:
+            y0 = 0
+        else:
+            y0 = int(torch.randint(0, height - crop_h + 1, (1,), device=image.device, generator=generator).item())
+        if width == crop_w:
+            x0 = 0
+        else:
+            x0 = int(torch.randint(0, width - crop_w + 1, (1,), device=image.device, generator=generator).item())
+
+        patch = image[:, :, y0 : y0 + crop_h, x0 : x0 + crop_w]
+        mask = make_fixed_mask(
+            patch.shape,
+            image.device,
+            image.dtype,
+            mode=mask_mode,
+            grid_period=grid_period,
+            random_ratio=random_ratio,
+            index=index,
+            generator=generator,
+        )
+        batches.append((patch, mask))
+
+    return batches
+
+
+def evaluate_monitor(
+    model: AttentionBSN,
+    monitor_batches: list[tuple[torch.Tensor, torch.Tensor]],
+    criterion: BlindSpotReconstructionLoss,
+    rtv_regularizer: RTVRegularizer,
+    recon_weight: float,
+    rtv_weight: float,
+    entropy_weight: float,
+    device: torch.device,
+    amp_enabled: bool,
+) -> Dict[str, float]:
+    """在固定验证 patch 上评估，用于选择中期最优 checkpoint。"""
+
+    was_training = model.training
+    model.eval()
+    totals = {
+        "val_loss": 0.0,
+        "val_recon_loss": 0.0,
+        "val_rtv_loss": 0.0,
+        "val_attention_entropy": 0.0,
+    }
+
+    with torch.no_grad():
+        for patch, mask in monitor_batches:
+            with make_autocast(device, amp_enabled):
+                pred, aux = model(patch)
+
+            pred_for_loss = pred.float()
+            target_for_loss = patch.float()
+            recon_loss, _ = criterion(pred_for_loss, target_for_loss, mask.float())
+            if rtv_weight != 0.0:
+                rtv_loss = rtv_regularizer(pred_for_loss)
+            else:
+                rtv_loss = pred_for_loss.new_tensor(0.0)
+            entropy_loss = attention_entropy_regularizer(aux["attention_entropy"].float())
+            loss = recon_weight * recon_loss + rtv_weight * rtv_loss + entropy_weight * entropy_loss
+
+            totals["val_loss"] += float(loss.detach().cpu())
+            totals["val_recon_loss"] += float(recon_loss.detach().cpu())
+            totals["val_rtv_loss"] += float(rtv_loss.detach().cpu())
+            totals["val_attention_entropy"] += float(aux["attention_entropy"].detach().cpu())
+
+    denom = float(max(len(monitor_batches), 1))
+    stats = {key: value / denom for key, value in totals.items()}
+    if was_training:
+        model.train()
+    return stats
+
+
+def load_checkpoint(path: Path, device: torch.device) -> Dict[str, Any]:
+    """读取 checkpoint，兼容不同 PyTorch 版本。"""
+
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+
 def build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
     if args.device is not None:
@@ -174,7 +306,7 @@ def main() -> None:
         reduction="mean",
     ).to(device)
     recon_weight = float(config["loss"].get("reconstruction_weight", config["loss"].get("charbonnier_weight", 1.0)))
-    rtv_weight = float(config["loss"].get("rtv_weight", 0.01))
+    rtv_weight = float(config["loss"].get("rtv_weight", 0.0))
     entropy_weight = float(config["loss"].get("entropy_weight", 0.0))
 
     initial_lr = float(config["train"].get("initial_lr", config["train"].get("lr", 5.0e-4)))
@@ -196,6 +328,17 @@ def main() -> None:
     log_interval = int(config["train"].get("log_interval", 50))
     save_interval = int(config["train"].get("save_interval", 500))
     iterator = trange(1, steps + 1, desc="train") if trange is not None else range(1, steps + 1)
+
+    monitor_config = config.get("monitor", {})
+    monitor_enabled = bool(monitor_config.get("enabled", False))
+    monitor_interval = max(1, int(monitor_config.get("interval", 100)))
+    monitor_metric = str(monitor_config.get("metric", "val_recon_loss"))
+    monitor_min_delta = float(monitor_config.get("min_delta", 0.0))
+    monitor_save_best = bool(monitor_config.get("save_best", True))
+    monitor_batches = build_monitor_batches(image, monitor_config, int(config.get("seed", 42))) if monitor_enabled else []
+    best_metric = float("inf")
+    best_step = 0
+    best_checkpoint_path = output_dir / "checkpoint_best.pt"
 
     history = []
     for step in iterator:
@@ -230,7 +373,32 @@ def main() -> None:
         scaler.step(optimizer)
         scaler.update()
 
-        if step % log_interval == 0 or step == 1:
+        val_stats = None
+        if monitor_enabled and (step == 1 or step % monitor_interval == 0):
+            val_stats = evaluate_monitor(
+                model=model,
+                monitor_batches=monitor_batches,
+                criterion=criterion,
+                rtv_regularizer=rtv_regularizer,
+                recon_weight=recon_weight,
+                rtv_weight=rtv_weight,
+                entropy_weight=entropy_weight,
+                device=device,
+                amp_enabled=infer_amp,
+            )
+            metric_value = float(val_stats.get(monitor_metric, val_stats["val_recon_loss"]))
+            is_best = metric_value < best_metric - monitor_min_delta
+            if is_best:
+                best_metric = metric_value
+                best_step = step
+                if monitor_save_best:
+                    save_checkpoint(best_checkpoint_path, model, config, data.norm_meta, step)
+            val_stats["monitor_metric"] = metric_value
+            val_stats["is_best"] = is_best
+            val_stats["best_step"] = best_step
+            val_stats["best_metric"] = best_metric
+
+        if step % log_interval == 0 or step == 1 or val_stats is not None:
             record = {
                 "step": step,
                 "lr": current_lr,
@@ -240,6 +408,8 @@ def main() -> None:
                 "attention_entropy": float(aux["attention_entropy"].detach().cpu()),
                 "valid_query_ratio": float(aux["valid_query_ratio"].detach().cpu()),
             }
+            if val_stats is not None:
+                record.update(val_stats)
             history.append(record)
             message = (
                 f"step={step:05d} loss={record['loss']:.6f} "
@@ -249,6 +419,13 @@ def main() -> None:
                 f"entropy={record['attention_entropy']:.4f} "
                 f"valid={record['valid_query_ratio']:.3f}"
             )
+            if val_stats is not None:
+                message += (
+                    f" val_recon={record['val_recon_loss']:.6f} "
+                    f"best_step={record['best_step']}"
+                )
+                if record["is_best"]:
+                    message += " best=*"
             if trange is not None and hasattr(iterator, "set_postfix_str"):
                 iterator.set_postfix_str(message)
             else:
@@ -258,6 +435,12 @@ def main() -> None:
             save_checkpoint(output_dir / f"checkpoint_{step:06d}.pt", model, config, data.norm_meta, step)
 
     save_checkpoint(output_dir / "checkpoint_final.pt", model, config, data.norm_meta, steps)
+
+    used_best_for_output = False
+    if monitor_enabled and monitor_save_best and best_checkpoint_path.exists():
+        best_checkpoint = load_checkpoint(best_checkpoint_path, device)
+        model.load_state_dict(best_checkpoint["model_state"])
+        used_best_for_output = True
 
     model.eval()
     with torch.no_grad():
@@ -280,6 +463,16 @@ def main() -> None:
 
     with (output_dir / "history.json").open("w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
+    monitor_summary = {
+        "enabled": monitor_enabled,
+        "metric": monitor_metric,
+        "best_step": best_step if best_step > 0 else None,
+        "best_metric": best_metric if best_step > 0 else None,
+        "checkpoint_best": str(best_checkpoint_path) if best_checkpoint_path.exists() else None,
+        "used_best_for_output": used_best_for_output,
+    }
+    with (output_dir / "monitor_summary.json").open("w", encoding="utf-8") as f:
+        json.dump(monitor_summary, f, ensure_ascii=False, indent=2)
 
     print(f"训练完成。结果已保存到: {output_dir}")
 

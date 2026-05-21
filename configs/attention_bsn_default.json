@@ -7,7 +7,7 @@
   "model": {
     "in_channels": 1,
     "base_channels": 48,
-    "blind_radius": 8,
+    "blind_radius": 7,
     "annulus_width": 6,
     "kv_depth": 2,
     "attention_topk": 16,
@@ -17,27 +17,38 @@
   "loss": {
     "type": "mse",
     "reconstruction_weight": 1.0,
-    "rtv_weight": 0.0,
+    "rtv_weight": 0.0005,
     "rtv_radius": 2,
     "rtv_sigma": 2.0,
     "rtv_eps": 0.001,
     "mask_mode": "grid",
     "grid_period": 5,
     "random_ratio": 0.03,
-    "entropy_weight": 0.0001
+    "entropy_weight": 0.00003
   },
   "train": {
     "steps": 3000,
     "patch_size": 680,
     "amp": true,
     "lr": 0.0005,
-    "peak_lr": 0.01,
+    "peak_lr": 0.003,
     "final_lr": 0.0,
     "warmup_ratio": 0.2,
     "weight_decay": 0.0,
     "log_interval": 50,
     "save_interval": 500,
     "output_dir": "runs/attention_bsn"
+  },
+  "monitor": {
+    "enabled": true,
+    "interval": 100,
+    "num_patches": 4,
+    "patch_size": 512,
+    "mask_mode": "grid",
+    "grid_period": 5,
+    "metric": "val_recon_loss",
+    "min_delta": 0.0,
+    "save_best": true
   },
   "infer": {
     "tile_size": 768,

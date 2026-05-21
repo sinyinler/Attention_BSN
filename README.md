@@ -43,7 +43,9 @@ python train.py \
 - `denoised.npy`：还原到原始 BFI 数值尺度的降噪结果
 - `denoised_preview.png`：8-bit 预览图，方便直接查看
 - `checkpoint_final.pt`：最终模型
+- `checkpoint_best.pt`：固定验证盲点集上表现最好的中期模型
 - `history.json`：训练过程中的 loss、attention entropy 等日志
+- `monitor_summary.json`：best checkpoint 对应的 step 和监测指标
 - `resolved_config.json`：本次实际使用的配置
 
 默认数据处理使用均值-标准差归一化：
@@ -130,6 +132,11 @@ python scripts/check_j_invariance.py \
 - `train.peak_lr`：warmup 结束学习率，默认 `0.01`。
 - `train.warmup_ratio`：warmup 占总步数比例，默认 `0.2`。
 - `train.final_lr`：cosine annealing 最终学习率，默认 `0.0`。
+- `monitor.enabled`：是否启用中期 checkpoint 监测，默认开启。
+- `monitor.interval`：每隔多少 step 评估一次固定验证盲点集，默认 `100`。
+- `monitor.metric`：选择 best checkpoint 的指标，默认 `val_recon_loss`。
+
+启用 monitor 后，训练结束会保留 `checkpoint_final.pt`，并自动用 `checkpoint_best.pt` 生成默认的 `denoised.npy/png`。这可以缓解单图自监督后期拟合噪声的问题。
 
 ## 当前实现边界
 
